@@ -8,25 +8,34 @@ import torch.nn as nn
 import torch
 from torch.utils.data import DataLoader
 import torch.nn.functional as F
+from pytorch_nndct.apis import torch_quantizer, dump_xmodel
+
 from ptflops import get_model_complexity_info
 
-import scipy.io as sio
-from Uformer.utils.loader import get_validation_data
-import Uformer.utils
 
-from Uformer.model import UNet,Uformer,Uformer_Cross,Uformer_CatCross
+sys.path.append(os.path.join(os.path.dirname(sys.argv[0]), "Uformer"))
+
+import scipy.io as sio
+from utils.loader import get_validation_data
+import utils
+
+from model import UNet,Uformer,Uformer_Cross,Uformer_CatCross
 
 from skimage import img_as_float32, img_as_ubyte
 from skimage.metrics import peak_signal_noise_ratio as psnr_loss
 from skimage.metrics import structural_similarity as ssim_loss
 
 parser = argparse.ArgumentParser(description='RGB demoire model test')
+parser.add_argument('--input_dir', default='./datasets/demoire/test/',
+    type=str, help='Directory of validation images')
 parser.add_argument('--result_dir', default='./results/demoire/',
     type=str, help='Directory for results')
 parser.add_argument('--weights', default='./models/model_best.pth',
     type=str, help='Path to weights')
-parser.add_argument('--quant_mode', type=str, default='calib',    
-    choices=['calib','test'], help='Quantization mode (calib or test). Default is calib')
+parser.add_argument('--quant_mode', type=str, default='calib',
+   choices=['calib','test'], help='Quantization mode (calib or test). Default is calib')
+parser.add_argument('--quant_model_dir', default='./results/quant_model/',
+    type=str, help='Directory for quant model')
 parser.add_argument('--gpus', default='0', type=str, help='CUDA_VISIBLE_DEVICES')
 parser.add_argument('--arch', default='UNet', type=str, help='arch')
 parser.add_argument('--batch_size', default=1, type=int, help='Batch size for dataloader')
@@ -60,26 +69,35 @@ model_restoration= utils.get_arch(args)
 model_restoration = torch.nn.DataParallel(model_restoration)
 
 utils.load_checkpoint(model_restoration,args.weights)
-print("===>Testing using weights: ", args.weights)
 
-model_restoration.cuda()
-model_restoration.eval()
-with torch.no_grad():
-    psnr_val_rgb = []
-    ssim_val_rgb = []
-    for ii, data_test in enumerate(tqdm(test_loader), 0):
-        rgb_gt = data_test[0].numpy().squeeze().transpose((1,2,0))
-        rgb_noisy = data_test[1].cuda()
-        filenames = data_test[2]
+if (args.quant_mode == 'calib'):
+    print("===>Quantize model with weights: ", args.weights)
+    input = torch.randn([args.batch_size, 3, 256, 256])
+    quantizer = torch_quantizer('calib', model_restoration, (input), output_dir=args.quant_model_dir) 
+    quantized_model = quantizer.quant_model
 
-        rgb_restored = model_restoration(rgb_noisy)
-        rgb_restored = torch.clamp(rgb_restored,0,1).cpu().numpy().squeeze().transpose((1,2,0))
-        psnr_val_rgb.append(psnr_loss(rgb_restored, rgb_gt))
-        ssim_val_rgb.append(ssim_loss(rgb_restored, rgb_gt, multichannel=True))
+    quantized_model.cuda()
+    quantized_model.eval()
+    with torch.no_grad():
+        psnr_val_rgb = []
+        ssim_val_rgb = []
+        for ii, data_test in enumerate(tqdm(test_loader), 0):
+            rgb_gt = data_test[0].numpy().squeeze().transpose((1,2,0))
+            rgb_noisy = data_test[1].cuda()
+            filenames = data_test[2]
 
-        if args.save_images:
-            utils.save_img(os.path.join(args.result_dir,filenames[0]), img_as_ubyte(rgb_restored))
+            rgb_restored = quantized_model(rgb_noisy)
+            rgb_restored = torch.clamp(rgb_restored,0,1).cpu().numpy().squeeze().transpose((1,2,0))
+            psnr_val_rgb.append(psnr_loss(rgb_restored, rgb_gt))
+            ssim_val_rgb.append(ssim_loss(rgb_restored, rgb_gt, multichannel=True))
 
-psnr_val_rgb = sum(psnr_val_rgb)/len(test_dataset)
-ssim_val_rgb = sum(ssim_val_rgb)/len(test_dataset)
-print("PSNR: %f, SSIM: %f " %(psnr_val_rgb,ssim_val_rgb))
+            if args.save_images:
+                utils.save_img(os.path.join(args.result_dir,filenames[0]), img_as_ubyte(rgb_restored))
+
+    psnr_val_rgb = sum(psnr_val_rgb)/len(test_dataset)
+    ssim_val_rgb = sum(ssim_val_rgb)/len(test_dataset)
+    print("PSNR: %f, SSIM: %f " %(psnr_val_rgb,ssim_val_rgb))
+
+    quantizer.export_quant_config()
+    
+elif (args.quant_mode == 'test '):

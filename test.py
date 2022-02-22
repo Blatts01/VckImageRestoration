@@ -10,11 +10,14 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from ptflops import get_model_complexity_info
 
-import scipy.io as sio
-from Uformer.utils.loader import get_validation_data
-import Uformer.utils
 
-from Uformer.model import UNet,Uformer,Uformer_Cross,Uformer_CatCross
+sys.path.append(os.path.join(os.path.dirname(sys.argv[0]), "Uformer"))
+
+import scipy.io as sio
+from utils.loader import get_validation_data
+import utils
+
+from model import UNet,Uformer,Uformer_Cross,Uformer_CatCross
 
 from skimage import img_as_float32, img_as_ubyte
 from skimage.metrics import peak_signal_noise_ratio as psnr_loss
