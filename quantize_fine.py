@@ -66,66 +66,69 @@ test_dataset = get_validation_data(args.input_dir)
 test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False, num_workers=8, drop_last=False)
 
 model_restoration= utils.get_arch(args)
-#model_restoration = torch.nn.DataParallel(model_restoration)
-
 utils.load_checkpoint(model_restoration,args.weights)
 
-if (args.quant_mode == 'calib'):
-    print("===>Quantize model with weights: ", args.weights)
-    input = torch.randn([args.batch_size, 3, 256, 256])
-    quantizer = torch_quantizer('calib', model_restoration, (input), output_dir=args.quant_model_dir) 
-    quantized_model = quantizer.quant_model
+model_restoration.cuda()
 
-    #quantized_model.cuda()
-    #quantized_model.eval()
+def evaluate(model, test_loader):
     with torch.no_grad():
         psnr_val_rgb = []
         ssim_val_rgb = []
         for ii, data_test in enumerate(tqdm(test_loader), 0):
             rgb_gt = data_test[0].numpy().squeeze().transpose((1,2,0))
             rgb_noisy = data_test[1].cuda()
-            filenames = data_test[2]
 
-            rgb_restored = quantized_model(rgb_noisy)
+            rgb_restored = model(rgb_noisy)
             rgb_restored = torch.clamp(rgb_restored,0,1).cpu().numpy().squeeze().transpose((1,2,0))
             psnr_val_rgb.append(psnr_loss(rgb_restored, rgb_gt))
             ssim_val_rgb.append(ssim_loss(rgb_restored, rgb_gt, multichannel=True))
 
-            if args.save_images:
-                utils.save_img(os.path.join(args.result_dir,filenames[0]), img_as_ubyte(rgb_restored))
-
     psnr_val_rgb = sum(psnr_val_rgb)/len(test_dataset)
     ssim_val_rgb = sum(ssim_val_rgb)/len(test_dataset)
     print("PSNR: %f, SSIM: %f " %(psnr_val_rgb,ssim_val_rgb))
+    return psnr_val_rgb,ssim_val_rgb
+
+
+if (args.quant_mode == 'calib'):
+
+    utils.mkdir(args.result_dir)
+    test_dataset = get_validation_data(args.input_dir)
+    test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False, num_workers=8, drop_last=False)
+    model_restoration= utils.get_arch(args)
+    utils.load_checkpoint(model_restoration,args.weights)
+    model_restoration.cuda()
+
+    print("===>Finetune with weights: ", args.weights)
+    input = torch.randn([args.batch_size, 3, 256, 256])
+    quantizer = torch_quantizer('calib', model_restoration, (input),output_dir=args.quant_model_dir) 
+    quantized_model = quantizer.quant_model
+
+    print("Evaluate Model before finetune")
+    evaluate(quantized_model,test_loader)
+    quantizer.export_quant_config()
+
+    # run fast finetuning after quatization 
+    print("Run fast finetune with quantized model")
+    quantizer.fast_finetune(evaluate,(quantized_model, test_loader))
+
+    print("Evaluate Model after finetune")
+    evaluate(quantized_model,test_loader)
 
     quantizer.export_quant_config()
 
 elif (args.quant_mode == 'test'):
-    print("===>Test quantized model with weights: ", args.weights)
+
+    utils.mkdir(args.result_dir)
+    test_dataset = get_validation_data(args.input_dir)
+    test_loader = DataLoader(dataset=test_dataset, batch_size=1, shuffle=False, num_workers=8, drop_last=False)
+    model_restoration= utils.get_arch(args)
+    model_restoration.cuda()
+
+
+    print("===>Test finetuned model with weights: ", args.weights)
     input = torch.randn([args.batch_size, 3, 256, 256])
     quantizer = torch_quantizer('calib', model_restoration, (input), output_dir=args.quant_model_dir)
     quantized_model = quantizer.quant_model
-
-    #quantized_model.cuda()
-    #quantized_model.eval()
-    with torch.no_grad():
-        psnr_val_rgb = []
-        ssim_val_rgb = []
-        for ii, data_test in enumerate(tqdm(test_loader), 0):
-            rgb_gt = data_test[0].numpy().squeeze().transpose((1,2,0))
-            rgb_noisy = data_test[1].cuda()
-            filenames = data_test[2]
-
-            rgb_restored = quantized_model(rgb_noisy)
-            rgb_restored = torch.clamp(rgb_restored,0,1).cpu().numpy().squeeze().transpose((1,2,0))
-            psnr_val_rgb.append(psnr_loss(rgb_restored, rgb_gt))
-            ssim_val_rgb.append(ssim_loss(rgb_restored, rgb_gt, multichannel=True))
-
-            if args.save_images:
-                utils.save_img(os.path.join(args.result_dir,filenames[0]), img_as_ubyte(rgb_restored))
-
-    psnr_val_rgb = sum(psnr_val_rgb)/len(test_dataset)
-    ssim_val_rgb = sum(ssim_val_rgb)/len(test_dataset)
-    print("PSNR: %f, SSIM: %f " %(psnr_val_rgb,ssim_val_rgb))
-
+    quantizer.load_ft_param()
+    evaluate(quantized_model,test_loader)
     quantizer.export_xmodel(deploy_check=False, output_dir=args.quant_model_dir)
