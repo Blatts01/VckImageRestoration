@@ -1,0 +1,17 @@
+
+[0;32m[VAIQ_NOTE]: Loading NNDCT kernels...[0m
+/workspace/datasets/demoire/sidd/val/
+You choose UNet...
+Traceback (most recent call last):
+  File "Uformer/utils/model_utils.py", line 26, in load_checkpoint
+    model.load_state_dict(checkpoint["state_dict"])
+KeyError: 'state_dict'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "quantize_fine.py", line 69, in <module>
+    utils.load_checkpoint(model_restoration,args.weights)
+  File "Uformer/utils/model_utils.py", line 28, in load_checkpoint
+    state_dict = checkpoint["state_dict"]
+KeyError: 'state_dict'
